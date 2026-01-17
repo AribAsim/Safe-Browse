@@ -310,13 +310,16 @@ EXPLICIT_KEYWORDS = [
     r'\bporn', r'\bxxx\b', r'\bsex\b', r'\bnude\b', r'\bnaked\b', 
     r'\bnsfw\b', r'\bhentai\b', r'\berotic\b', 
     r'\bfuck', r'\bshit\b', r'\bbitch\b', r'\bdick\b',
-    r'\bpussy\b', r'\bcock\b', r'\bcum\b', 
+    r'\bpussy\b', r'\bcock\b', r'\bcum', 
     r'\bmasturbat', r'\borgy\b', r'\brape\b',
     r'adult content', r'adult site', r'adult movie', r'adult video',
     # Contextual Explicit Phrases (to avoid blocking single words like 'hot')
     'hot girl', 'hot girls', 'hot babe', 'hot babes', 'hot sex', 'hot women', 
     'hot milf', 'hot teen', 'hot teens', 'hot wife', 'hot wives', 'hot mom', 'hot moms',
-    'strip club', 'strip tease', 'hard core', 'hardcore'
+    'strip club', 'strip tease', 'hard core', 'hardcore',
+    # Expanded Terms
+    'cumshot', 'creampie', 'gangbang', 'blowjob', 'handjob', 'sodomy',
+    'incest', 'upskirt', 'deepthroat', 'dildo', 'vibrator'
 ]
 
 VIOLENCE_KEYWORDS = [
@@ -329,7 +332,10 @@ VIOLENCE_KEYWORDS = [
     r'\bmassacre\b', r'\bslaughter\b', r'\bassault\b', r'\bbeating\b',
     r'\bfight\b', r'\battack\b', r'\bweapon\b', r'\bgun\b', r'\bknife\b',
     r'\bfirearm\b', r'\bpistol\b', r'\brifle\b', r'\bammo\b',
-    r'\bwar\b', r'\bbattle\b', r'\bcombat\b'
+    r'\bwar\b', r'\bbattle\b', r'\bcombat\b',
+    # Expanded Violence
+    r'\bexecution\b', r'\blynch', r'\bstone to death',
+    r'\bgutted\b', r'\bdisembowel'
 ]
 
 DRUG_KEYWORDS = [
@@ -364,6 +370,21 @@ CRIME_KEYWORDS = [
     r'\btrafficking\b', r'\bkidnap\b', r'\babduct\b',
     r'\bshoplift\b', r'\bvandalism\b', r'\barson\b'
 ]
+
+# Cultural/Pop-Culture Exceptions (Allow-list)
+# These override blocks if the text heavily matches them
+CULTURAL_EXCEPTIONS = [
+    'sex pistols', 'hot girl summer', 'kike name', 'kike hernandez', 'kike garcia'
+]
+
+def normalize_text(text):
+    """
+    Remove spaces/dots between chars to catch obfuscated words like 'p.o.r.n' or 's e x'.
+    Only applies if the word length is small (< 15 chars) to avoid merging sentences.
+    """
+    # Simple strategy: Create a version without spaces/dots/symbols
+    # This is aggressive, so we valid matches against keywords
+    return re.sub(r'[\s\._\-]', '', text).lower()
 
 # Meta keywords that are often safe in search suggestions but unsafe on regular sites
 META_KEYWORDS = []
@@ -479,6 +500,29 @@ def analyze_text_content(text: str, age: int, url_context: Optional[str] = None)
     """
     if not text or not text.strip():
         return True, 0.0, []
+
+    text_lower = text.lower()
+
+    # --- 0. Cultural Exceptions (Layer 0) ---
+    for exception in CULTURAL_EXCEPTIONS:
+        if exception in text_lower:
+            return True, 0.0, [f"Allowed by cultural exception: {exception}"]
+
+    # --- 0.5 Normalization for Obfuscation ---
+    # Check normalized text against explicit list only
+    normalized = normalize_text(text)
+    
+    # Only run this aggressive check if normalization actually changed something (i.e., removed obfuscation)
+    # This matching logic prevents "Essex" -> "sex" (False Positive) because "Essex" == "essex"
+    if normalized != text_lower:
+        obfuscated_matches = []
+        # Only check short keywords for obfuscation to avoid noise
+        for kw in ['porn', 'sex', 'nude', 'fuck', 'shit', 'cock', 'dick', 'pussy', 'xxx']:
+            if kw in normalized and len(normalized) < len(kw) + 15: 
+                 obfuscated_matches.append(kw)
+        
+        if obfuscated_matches:
+             return False, 1.0, [f"Obfuscated terms detected: {obfuscated_matches}"]
 
     age_cat = get_age_category(age)
     thresholds = AGE_THRESHOLDS['text'][age_cat]

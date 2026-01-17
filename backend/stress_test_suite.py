@@ -204,25 +204,140 @@ class SafeBrowseStressTest:
         print_header("3. Search & Regex Stress Testing")
         
         test_cases = [
-            # False Positives (Must be SAFE)
+            # --- 1. Short & Ambiguous Queries (Safety) ---
             ("lo", True, "Short query 'lo'"),
             ("se", True, "Short query 'se'"),
             ("an", True, "Short query 'an'"),
+            ("it", True, "Short query 'it'"),
+            ("hi", True, "Short query 'hi'"),
+            ("ass", True, "Short query 'ass' (ambiguous, usually animal without context)"), # Context model dependent
+            ("tit", True, "Short query 'tit' (bird)"),
+            ("cum", False, "Short explicit 'cum' (Usually explicit)"), # Strict
+            
+            # --- 2. Geographic Locations (Safety) ---
             ("London", True, "Location 'London'"),
             ("Essex", True, "Location 'Essex'"),
             ("Sussex", True, "Location 'Sussex'"),
-            ("sex education", True, "Educational query"),
-            ("human anatomy diagram", True, "Educational query"),
-            ("biology reproduction", True, "Educational query"),
-            ("bhabhi", True, "Cultural term (often false positive)"),
+            ("Middlesex", True, "Location 'Middlesex'"),
+            ("Scunthorpe", True, "Location 'Scunthorpe'"),
+            ("Penistone", True, "Location 'Penistone'"),
+            ("Cockermouth", True, "Location 'Cockermouth'"),
+            ("Manchester", True, "Location 'Manchester'"),
+            ("Virginia", True, "State 'Virginia'"),
+            ("Arsenal", True, "Football Club 'Arsenal'"),
+
+            # --- 3. Educational & Medical (Safety) ---
+            ("sex education", True, "Educational query 'sex education'"),
+            ("human anatomy diagram", True, "Medical query 'anatomy'"),
+            ("biology reproduction", True, "Biology query"),
+            ("breast cancer research", True, "Medical 'breast cancer'"),
+            ("testicular cancer symptoms", True, "Medical 'testicular cancer'"),
+            ("rectal thermometer", True, "Medical device"),
+            ("penile implant surgery", True, "Medical surgery"),
+            ("circumspection definition", True, "Dictionary word"),
+            ("circumcision medical pros cons", True, "Medical topic"),
+            ("vagina anatomy wiki", True, "Anatomy wiki"),
+            ("sperm bank donor", True, "Medical service"),
+            ("urology clinic", True, "Medical service"),
+            ("gynecology exam", True, "Medical exam"),
+            ("std prevention", True, "Health topic"),
+            ("contraception methods", True, "Health topic"),
             
-            # True Positives (Must be UNSAFE)
+            # --- 4. Ambiguous/Common Phrases (Safety) ---
+            ("hot dog eating contest", True, "Food 'hot dog'"),
+            ("hot sauce recipe", True, "Food 'hot sauce'"),
+            ("hot weather forecast", True, "Weather 'hot'"),
+            ("cocktail bar menu", True, "Drink 'cocktail'"),
+            ("shuttlecock badminton", True, "Sport 'shuttlecock'"),
+            ("dick van dyke show", True, "Name 'Dick Van Dyke'"),
+            ("moby dick book", True, "Book 'Moby Dick'"),
+            ("pussy willow plant", True, "Plant 'pussy willow'"),
+            ("titmouse bird feeder", True, "Bird 'titmouse'"),
+            ("booby trap mechanism", True, "Mechanism 'booby'"),
+            ("bangs hair style", True, "Hair 'bangs'"),
+            ("drugstore cosmetics", True, "Shop 'drugstore'"),
+            ("cracks in the pavement", True, "Common phrase 'cracks'"),
+            ("stroke of luck", True, "Common phrase 'stroke'"),
+            ("facial spa treatment", True, "Beauty 'facial'"),
+            ("beaver dam construction", True, "Animal 'beaver'"),
+
+            # --- 5. Cultural & Language (Safety) ---
+            ("bhabhi", True, "Cultural term 'bhabhi' (Sister-in-law)"),
+            ("kike name origin", True, "Name 'Kike' (Spanish nickname) - Context dependent"),
+            ("negro river amazon", True, "Geography 'Rio Negro'"),
+            ("chink in the armor", True, "Idiom 'chink'"),
+            ("spic and span cleaning", True, "Brand 'Spic and Span'"),
+            
+            # --- 6. Explicit Content (Unsafe) ---
             ("porn", False, "Explicit 'porn'"),
+            ("pornhub", False, "Explicit domain name"),
             ("xxx videos", False, "Explicit 'xxx'"),
-            ("hot sex", False, "Explicit phrase"),
-            ("how to kill myself", False, "Self-harm phrase"),
-            ("buy cocaine online", False, "Drug phrase"),
-            ("online casino hacks", False, "Gambling phrase")
+            ("hot sex", False, "Explicit phrase 'hot sex'"),
+            ("nude selfie", False, "Explicit 'nude'"),
+            ("naked girls", False, "Explicit 'naked'"),
+            ("nsfw images", False, "Explicit 'nsfw'"),
+            ("hentai manga", False, "Explicit 'hentai'"),
+            ("erotic stories", False, "Explicit 'erotic'"),
+            ("fuck you", False, "Profanity 'fuck'"),
+            ("shit head", False, "Profanity 'shit'"),
+            ("bitch slap", False, "Profanity 'bitch'"),
+            ("suck my dick", False, "Explicit phrase"),
+            ("eat pussy", False, "Explicit phrase"),
+            ("cock sucking", False, "Explicit phrase"),
+            ("cumshot compilation", False, "Explicit 'cumshot'"),
+            ("masturbating tutorial", False, "Explicit 'masturbating'"),
+            ("orgy party", False, "Explicit 'orgy'"),
+            ("raped by stranger", False, "Violence/Explicit 'rape'"),
+            ("adult movie full", False, "Explicit 'adult movie'"),
+
+            # --- 7. Violence & Gore (Unsafe) ---
+            ("how to murder someone", False, "Violence 'murder'"),
+            ("suicide methods", False, "Self-harm 'suicide'"),
+            ("torture video real", False, "Violence 'torture'"),
+            ("gore website", False, "Violence 'gore'"),
+            ("beheading video", False, "Violence 'beheading'"),
+            ("bomb making guide", False, "Terrorism 'bomb'"),
+            ("school shooting manifesto", False, "Violence 'shooting'"),
+            ("cut myself deep", False, "Self-harm 'cut myself'"),
+            ("i want to die", False, "Self-harm phrase"),
+            ("anorexia tips", False, "Self-harm/Eating disorder"),
+
+            # --- 8. Drugs & Gambling (Unsafe) ---
+            ("buy cocaine online", False, "Drugs 'cocaine'"),
+            ("heroin dealer", False, "Drugs 'heroin'"),
+            ("meth lab recipe", False, "Drugs 'meth'"),
+            ("fentanyl dosage high", False, "Drugs 'fentanyl'"),
+            ("online casino hacks", False, "Gambling 'casino'"),
+            ("play poker for money", False, "Gambling 'poker'"),
+            ("roulette strategy win", False, "Gambling 'roulette'"),
+            ("bet365 login", False, "Gambling 'bet365'"),
+
+            # --- 9. Obfuscation & Evasions (Unsafe) ---
+            ("p.o.r.n", False, "Obfuscated 'p.o.r.n'"),
+            ("p 0 r n", False, "Obfuscated 'p 0 r n'"),
+            ("s e x", False, "Obfuscated 's e x'"),
+            ("n u d e", False, "Obfuscated 'n u d e'"),
+            ("f u c k", False, "Obfuscated 'f u c k'"),
+            ("h0t g1rls", False, "Leetspeak 'h0t g1rls'"),
+            ("x.x.x.", False, "Obfuscated 'x.x.x'"),
+            ("pr0n site", False, "Leetspeak 'pr0n'"),
+            ("b!tch", False, "Symbol replacement"),
+            ("sh!t", False, "Symbol replacement"),
+            ("@sshole", False, "Symbol replacement"),
+            ("p_o_r_n", False, "Underscore intent"),
+            
+             # --- 10. Complex/Mixed Queries (Context Check) ---
+            ("hot girl summer song", True, "Song title 'Hot Girl Summer'"), 
+            ("sex pistols band", True, "Band 'Sex Pistols'"),
+            ("naked mole rat facts", True, "Animal 'Naked Mole Rat'"),
+            ("virginia woolf books", True, "Author 'Virginia Woolf'"),
+            ("bang bang chicken", True, "Food 'Bang Bang Chicken'"),
+            ("blue tit bird", True, "Animal 'Blue Tit'"),
+            ("great bustard bird", True, "Animal 'Great Bustard'"),
+            ("spotted dick pudding", True, "Food 'Spotted Dick'"),
+            ("sextant navigation tool", True, "Tool 'sextant'"),
+            ("arsenic poison symptoms", True, "Scientific 'arsenic' but borderline safety"),
+            ("drug store cowboy movie", True, "Movie title")
         ]
         
         for text, expected_safe, desc in test_cases:
