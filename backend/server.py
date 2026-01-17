@@ -433,9 +433,22 @@ def is_search_engine(url: str) -> bool:
     search_engines = ['google.com', 'bing.com', 'duckduckgo.com', 'yahoo.com', 'baidu.com', 'chrome://newtab']
     return any(se in url_lower for se in search_engines)
 
+# Layer 2: Text Context Helpers
+REDEEMING_KEYWORDS = {
+    'anatomy', 'biology', 'medical', 'health', 'diagnosis', 'surgery', 
+    'education', 'research', 'scientific', 'study', 'clinical', 'patient',
+    'university', 'school', 'textbook', 'journal', 'prevention'
+}
+
+# Arousing keywords that, when combined with explicit terms, confirm NSFW intent
+AROUSING_KEYWORDS = {
+    'hot', 'sexy', 'cam', 'video', 'live', 'gallery', 'pics', 
+    'nude', 'naked', 'xxx', 'porn', 'fuck', 'adult', '18+'
+}
+
 def analyze_text_content(text: str, age: int, url_context: Optional[str] = None) -> Tuple[bool, float, List[str]]:
     """
-    Multi-model text analysis with ensemble voting and context awareness
+    Multi-model text analysis with ensemble voting and context awareness (Layer 2)
     """
     if not text or not text.strip():
         return True, 0.0, []
@@ -444,39 +457,48 @@ def analyze_text_content(text: str, age: int, url_context: Optional[str] = None)
     thresholds = AGE_THRESHOLDS['text'][age_cat]
     reasons = []
     
-    # 1. Layer: Keyword Match
-    explicit_matches = EXPLICIT_RE.findall(text)
+    # Context Factors
+    on_search_engine = is_search_engine(url_context)
+    domain_trust = calculate_domain_trust(url_context)
+    on_trusted_site = domain_trust >= 0.8
+    
+    # 1. Layer: Keyword Match & Co-occurrence
+    explicit_matches = set(EXPLICIT_RE.findall(text))
     violence_matches = VIOLENCE_RE.findall(text)
     drug_matches = DRUG_RE.findall(text)
     gambling_matches = GAMBLING_RE.findall(text)
     self_harm_matches = SELF_HARM_RE.findall(text)
     crime_matches = CRIME_RE.findall(text)
     
-    # Context-aware filtering decision:
-    on_search_engine = is_search_engine(url_context)
-    on_trusted_site = is_trusted_domain(url_context)
+    # Filter explicit matches based on context (Layer 2)
+    final_explicit_matches = []
     
-
-    filtered_explicit = []
+    if explicit_matches:
+        text_lower = text.lower()
+        # Check for redeeming context
+        redeeming_count = sum(1 for w in REDEEMING_KEYWORDS if w in text_lower)
+        arousing_count = sum(1 for w in AROUSING_KEYWORDS if w in text_lower)
+        
+        # Heuristic: If we have redeeming words and NO arousing words, we might allow simple explicit terms
+        is_educational_context = redeeming_count >= 2 and arousing_count == 0
+        
+        if on_trusted_site or is_educational_context:
+            # Be very lenient. Only block if we see hardcore terms (which shouldn't be in edu context)
+            # For now, we filter out common "biological" explicit terms if context is good
+            for match in explicit_matches:
+                # If term is ambiguous or mild, and context is educational, ignore it
+                if match.lower() in ['sex', 'breast', 'penis', 'vagina'] and is_educational_context:
+                    continue
+                final_explicit_matches.append(match)
+        else:
+            final_explicit_matches = list(explicit_matches)
+            
     if on_search_engine:
-        # On search engines, we rely on the URL/Query analysis (analyze_url) to block explicit searches.
-        # We generally IGNORE page text here because it often contains:
-        # 1. Auto-suggestions (which might be explicit even if the user didn't search for them)
-        # 2. Irrelevant text snippets
-        # Blocking based on suggestions prevents the user from even searching safely.
-        return True, 0.0, []
+         return True, 0.0, []
 
-    if on_trusted_site:
-        # Ignore common meta keywords and be more lenient on trusted sites
-        for match in set(explicit_matches):
-            match_lower = match.lower()
-            if match_lower not in META_KEYWORDS and len(match_lower) > 3:
-                filtered_explicit.append(match)
-    else:
-        filtered_explicit = explicit_matches
-
-    if filtered_explicit:
-        reasons.append(f"Explicit terms detected: {set(filtered_explicit)}")
+    if final_explicit_matches:
+        reasons.append(f"Explicit terms detected: {set(final_explicit_matches)}")
+        
     if violence_matches and not on_trusted_site:
         reasons.append(f"Violence/Gore detected: {set(violence_matches)}")
     if drug_matches and not on_trusted_site:
@@ -598,7 +620,9 @@ def analyze_image_content(content: str, age: int, url_context: Optional[str] = N
         if content in IMAGE_CACHE:
             return IMAGE_CACHE[content]
 
-    on_trusted_site = is_trusted_domain(url_context)
+    # Layer 1 Context Check
+    domain_trust = calculate_domain_trust(url_context)
+    on_trusted_site = domain_trust >= 0.8
     
     try:
         img_data = None
@@ -699,7 +723,7 @@ def analyze_image_content(content: str, age: int, url_context: Optional[str] = N
         logger.error(f"Image Analysis Error: {e}")
         return True, 0.0, [str(e)]
 
-def analyze_url(url: str, age: int) -> Tuple[bool, float, List[str]]:
+def analyze_url(url: str, age: int, blocked_sites: List[str] = None, whitelisted_sites: List[str] = None) -> Tuple[bool, float, List[str]]:
     """
     URL analysis with domain-level blocking and age thresholds
     """
@@ -707,6 +731,18 @@ def analyze_url(url: str, age: int) -> Tuple[bool, float, List[str]]:
     reasons = []
     score = 0
     
+    # 0. User-Defined Whitelist/Blacklist Check
+    if blocked_sites is None: blocked_sites = []
+    if whitelisted_sites is None: whitelisted_sites = []
+    
+    for allowed in whitelisted_sites:
+        if allowed.lower() in url_lower:
+            return True, 0.0, ["Whitelisted by parent"]
+            
+    for blocked in blocked_sites:
+        if blocked.lower() in url_lower:
+             return False, 1.0, ["Blacklisted by parent"]
+
     # 1. Age-Based Social Media Restriction (Policy Check)
     # We check this FIRST to short-circuit and avoid unnecessary processing
     if age is not None and age < SOCIAL_MEDIA_AGE_LIMIT and SOCIAL_MEDIA_DOMAINS:
@@ -724,6 +760,13 @@ def analyze_url(url: str, age: int) -> Tuple[bool, float, List[str]]:
         except Exception:
             # If URL parsing fails, fail open (allow) for this specific check to avoid overblocking
             pass
+
+    # 2. Domain Trust Check (Layer 1)
+    # If the domain is highly trusted (e.g. .edu, .gov, medical), we skip keyword heuristics on the URL
+    # deeper text analysis will still run if the page is visited, but we won't block just because the URL contains "sex" (e.g. sex-education)
+    domain_trust = calculate_domain_trust(url)
+    if domain_trust >= 0.8:
+         return True, 0.0, ["Trusted Domain (Safe)"]
     
     # Known adult domains (Expanded)
     adult_domains = [
@@ -993,7 +1036,44 @@ async def delete_profile(profile_id: str, current_user = Depends(get_current_use
     
     return {"message": "Profile deleted successfully"}
 
-# ==================== CONTENT ANALYSIS ROUTES ====================
+# ==================== ADVANCED CONTEXT ANALYSIS (LAYER 1 & 2) ====================
+
+# Layer 1: Domain Trust
+TRUSTED_TLDS = ['.edu', '.gov', '.mil', '.ac.uk', '.edu.au', '.gov.au']
+EDUCATIONAL_DOMAINS = [
+    'wikipedia.org', 'webmd.com', 'mayoclinic.org', 'nih.gov', 'cdc.gov',
+    'who.int', 'britannica.com', 'khanacademy.org', 'coursera.org', 'edx.org',
+    'stackoverflow.com', 'github.com', 'w3schools.com', 'mdn.io', 'mozilla.org'
+]
+
+def calculate_domain_trust(url: str) -> float:
+    """
+    Returns a trust score between -1.0 (Bad) and 1.0 (Trusted).
+    0.0 is neutral.
+    """
+    if not url:
+        return 0.0
+        
+    try:
+        parsed = urlparse(url.lower())
+        hostname = parsed.hostname
+        if not hostname:
+             return 0.0
+             
+        # Check TLDs
+        for tld in TRUSTED_TLDS:
+            if hostname.endswith(tld):
+                return 1.0 # Highly trusted
+                
+        # Check Educational Domains
+        for domain in EDUCATIONAL_DOMAINS:
+            if hostname == domain or hostname.endswith('.' + domain):
+                return 0.8 # Trusted educational/medical
+                
+        return 0.0
+    except:
+        return 0.0
+
 
 @api_router.post("/content/analyze", response_model=ContentAnalysisResponse)
 async def analyze_content(request: ContentAnalysisRequest):
@@ -1013,7 +1093,7 @@ async def analyze_content(request: ContentAnalysisRequest):
         )
     elif request.content_type == "url":
         is_safe, confidence, reasons = await loop.run_in_executor(
-            None, analyze_url, request.content, age
+            None, analyze_url, request.content, age, profile.get("blocked_sites", []), profile.get("whitelisted_sites", [])
         )
     elif request.content_type == "image":
         is_safe, confidence, reasons = await loop.run_in_executor(

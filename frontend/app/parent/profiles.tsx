@@ -39,6 +39,10 @@ export default function Profiles() {
     age: '',
     maturity_level: 'moderate',
   });
+  const [blockedSites, setBlockedSites] = useState<string[]>([]);
+  const [whitelistedSites, setWhitelistedSites] = useState<string[]>([]);
+  const [newBlockedSite, setNewBlockedSite] = useState('');
+  const [newWhitelistedSite, setNewWhitelistedSite] = useState('');
 
   useEffect(() => {
     loadProfiles();
@@ -60,6 +64,8 @@ export default function Profiles() {
   const openCreateModal = () => {
     setEditingProfile(null);
     setFormData({ name: '', age: '', maturity_level: 'moderate' });
+    setBlockedSites([]);
+    setWhitelistedSites([]);
     setModalVisible(true);
   };
 
@@ -70,6 +76,8 @@ export default function Profiles() {
       age: profile.age.toString(),
       maturity_level: profile.maturity_level,
     });
+    setBlockedSites(profile.blocked_sites || []);
+    setWhitelistedSites(profile.whitelisted_sites || []);
     setModalVisible(true);
   };
 
@@ -90,8 +98,8 @@ export default function Profiles() {
         name: formData.name,
         age,
         maturity_level: formData.maturity_level,
-        blocked_sites: editingProfile?.blocked_sites || [],
-        whitelisted_sites: editingProfile?.whitelisted_sites || [],
+        blocked_sites: blockedSites,
+        whitelisted_sites: whitelistedSites,
       };
 
       if (editingProfile) {
@@ -274,6 +282,72 @@ export default function Profiles() {
               </View>
             </View>
 
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Blocked Sites</Text>
+              <View style={styles.addSiteContainer}>
+                <TextInput
+                  style={[styles.input, styles.siteInput]}
+                  value={newBlockedSite}
+                  onChangeText={setNewBlockedSite}
+                  placeholder="e.g., badsite.com"
+                  placeholderTextColor="#64748b"
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={styles.addSiteButton}
+                  onPress={() => {
+                    if (newBlockedSite && !blockedSites.includes(newBlockedSite)) {
+                      setBlockedSites([...blockedSites, newBlockedSite]);
+                      setNewBlockedSite('');
+                    }
+                  }}
+                >
+                  <Ionicons name="add" size={24} color="#ffffff" />
+                </TouchableOpacity>
+              </View>
+              {blockedSites.map((site, index) => (
+                <View key={index} style={styles.siteItem}>
+                  <Text style={styles.siteText}>{site}</Text>
+                  <TouchableOpacity onPress={() => setBlockedSites(blockedSites.filter((s) => s !== site))}>
+                    <Ionicons name="close-circle" size={20} color="#ef4444" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Whitelisted Sites</Text>
+              <View style={styles.addSiteContainer}>
+                <TextInput
+                  style={[styles.input, styles.siteInput]}
+                  value={newWhitelistedSite}
+                  onChangeText={setNewWhitelistedSite}
+                  placeholder="e.g., globalschool.edu"
+                  placeholderTextColor="#64748b"
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={styles.addSiteButton}
+                  onPress={() => {
+                    if (newWhitelistedSite && !whitelistedSites.includes(newWhitelistedSite)) {
+                      setWhitelistedSites([...whitelistedSites, newWhitelistedSite]);
+                      setNewWhitelistedSite('');
+                    }
+                  }}
+                >
+                  <Ionicons name="add" size={24} color="#ffffff" />
+                </TouchableOpacity>
+              </View>
+              {whitelistedSites.map((site, index) => (
+                <View key={index} style={styles.siteItem}>
+                  <Text style={styles.siteText}>{site}</Text>
+                  <TouchableOpacity onPress={() => setWhitelistedSites(whitelistedSites.filter((s) => s !== site))}>
+                    <Ionicons name="close-circle" size={20} color="#ef4444" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+
             <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
               <Text style={styles.saveButtonText}>{editingProfile ? 'Update' : 'Create'}</Text>
             </TouchableOpacity>
@@ -436,6 +510,36 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
     borderRadius: 8,
+  },
+  addSiteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  siteInput: {
+    flex: 1,
+    marginRight: 8,
+  },
+  addSiteButton: {
+    backgroundColor: '#6366f1',
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  siteItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#334155',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  siteText: {
+    color: '#f1f5f9',
+    fontSize: 14,
   },
   segmentActive: {
     backgroundColor: '#6366f1',

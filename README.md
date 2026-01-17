@@ -13,6 +13,11 @@ SafeBrowse is a next-generation parental control application designed to provide
 - **Multi-Model AI Analysis**: Uses an ensemble of AI models (Falconsai, AdamCodd, Toxic-Comment) for robust detection.
 - **Real-Time Image Filtering**: Analyzes images on the fly using GPU acceleration (if available) to block NSFW, gore, and violent imagery.
 - **Context-Aware Text Analysis**: Detects bullying, hate speech, sexual content, and self-harm triggers in text.
+- **Advanced Context Engine (New)**: Multi-layer analysis engine that reduces false positives:
+  - **Layer 1 (Domain)**: Trusts educational/medical sites (.edu, .gov, webmd.com).
+  - **Layer 2 (Text)**: Distinguishes between "sex education" (Safe) and explicit content using co-occurrence logic.
+  - **Layer 3 (Image)**: Adjusts sensitivity based on page context.
+  - **Layer 4 (Consensus)**: Aggregates signals for a final decision.
 - **Expanded Safety Categories**: Blocks not just adult content, but also:
   - 🔞 Adult Content (Smart pattern matching minimizes false positives)
   - 🩸 Gore & Violence
