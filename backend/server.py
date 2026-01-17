@@ -446,9 +446,36 @@ AROUSING_KEYWORDS = {
     'nude', 'naked', 'xxx', 'porn', 'fuck', 'adult', '18+'
 }
 
+# Ethical / Hate Speech Keywords for "Disguised" Content Detection
+# Includes terms related to racial slurs, extremist ideologies, and pseudo-scientific hate
+HATE_KEYWORDS = {
+  'white power', 'aryan', 'jihad', 'crusade', 'incel', 'chads', 'stacy',
+  'kike', 'nigger', 'faggot', 'tranny', 'dyke', 'retard', 'subhuman',
+  'pure blood', 'ethnic cleansing', 'genocide hoax', 'race realism'
+}
+# Regex for stricter phrase matching if needed (simplified for now to keywords)
+
+def analyze_video_metadata(url: str, title: str, description: str, age: int) -> Tuple[bool, float, List[str]]:
+    """
+    Analyzes video metadata (title, description) for harmful content.
+    Used for YouTube, TikTok, etc. where we can't scan the video binary easily.
+    """
+    combined_text = f"{title} {description}"
+    
+    # Run standard text analysis on the metadata
+    is_safe, confidence, reasons = analyze_text_content(combined_text, age, url_context=url)
+    
+    # Add video-specific checks here if needed (e.g. clickbait detection)
+    
+    if not is_safe:
+        return False, confidence, [f"Video Metadata Unsafe: {r}" for r in reasons]
+        
+    return True, 0.0, []
+
 def analyze_text_content(text: str, age: int, url_context: Optional[str] = None) -> Tuple[bool, float, List[str]]:
     """
     Multi-model text analysis with ensemble voting and context awareness (Layer 2)
+    Updated to include Ethical/Hate Speech filtering (Layer 2.5)
     """
     if not text or not text.strip():
         return True, 0.0, []
@@ -462,6 +489,24 @@ def analyze_text_content(text: str, age: int, url_context: Optional[str] = None)
     domain_trust = calculate_domain_trust(url_context)
     on_trusted_site = domain_trust >= 0.8
     
+    # --- ETHICAL FILTERING (Override) ---
+    # Detect harmful ideologies even on "Educational" sites
+    text_lower = text.lower()
+    hate_matches = [w for w in HATE_KEYWORDS if w in text_lower]
+    
+    if hate_matches:
+        # If we find hate speech, we BLOCK regardless of domain trust (mostly)
+        # Exception: Wikipedia usually discusses these terms in valid context.
+        # But a random blog or standard site using them is likely harmful.
+        
+        # Heuristic: If trusted site (Wiki) AND mild usage, let it slide.
+        # If untrusted OR severe usage (multiple terms), BLOCK.
+        
+        if on_trusted_site and len(hate_matches) == 1:
+             pass # Likely a dictionary definition or history article
+        else:
+             return False, 1.0, [f"Ethical Violation / Hate Speech Detected: {set(hate_matches)}"]
+
     # 1. Layer: Keyword Match & Co-occurrence
     explicit_matches = set(EXPLICIT_RE.findall(text))
     violence_matches = VIOLENCE_RE.findall(text)
@@ -579,6 +624,7 @@ def analyze_text_content(text: str, age: int, url_context: Optional[str] = None)
     # Block on AI sentiment mismatch (only if we have significant confidence)
     if ai_votes_toxic > ai_votes_safe and ai_votes_toxic >= 1.0:
         is_safe = False
+        reasons.append(f"Flagged by AI sentiment analysis (Confidence: {ai_votes_toxic})")
         
     # Block on violence/drugs/gambling for younger kids (unless on trusted site)
     if not on_trusted_site:
@@ -1087,42 +1133,62 @@ async def analyze_content(request: ContentAnalysisRequest):
     # Run heavy analysis in a separate thread to avoid blocking the async event loop
     loop = asyncio.get_event_loop()
     
-    if request.content_type == "text":
-        is_safe, confidence, reasons = await loop.run_in_executor(
-            None, analyze_text_content, request.content, age, request.context
+    try:
+        if request.content_type == "text":
+            is_safe, confidence, reasons = await loop.run_in_executor(
+                None, analyze_text_content, request.content, age, request.context
+            )
+        elif request.content_type == "url":
+            is_safe, confidence, reasons = await loop.run_in_executor(
+                None, analyze_url, request.content, age, profile.get("blocked_sites", []), profile.get("whitelisted_sites", [])
+            )
+        elif request.content_type == "video_metadata":
+             # New support based on plan B1
+             video_url = ""
+             description = ""
+             title = request.content
+             
+             if request.context:
+                 parts = request.context.split("||", 1)
+                 video_url = parts[0].strip()
+                 if len(parts) > 1:
+                     description = parts[1].strip()
+                     
+             is_safe, confidence, reasons = await loop.run_in_executor(
+                None, analyze_video_metadata, video_url, title, description, age
+            )     
+        elif request.content_type == "image":
+            is_safe, confidence, reasons = await loop.run_in_executor(
+                 None, analyze_image_content, request.content, age, request.context
+            )
+        else:
+            return ContentAnalysisResponse(is_safe=True, confidence=0.0, reasons=[], blocked=False)
+            
+        # Log if harmful
+        if not is_safe:
+            log_dict = {
+                "profile_id": request.profile_id,
+                "content_type": request.content_type,
+                "detected_at": datetime.utcnow(),
+                "is_safe": is_safe,
+                "confidence": confidence,
+                "reasons": reasons,
+                "content_snippet": request.content[:200] if request.content_type == "text" else "[Content blocked]",
+                "url": request.context or ""
+            }
+            await db.logs.insert_one(log_dict)
+
+        return ContentAnalysisResponse(
+            is_safe=is_safe,
+            confidence=confidence,
+            reasons=reasons,
+            blocked=not is_safe
         )
-    elif request.content_type == "url":
-        is_safe, confidence, reasons = await loop.run_in_executor(
-            None, analyze_url, request.content, age, profile.get("blocked_sites", []), profile.get("whitelisted_sites", [])
-        )
-    elif request.content_type == "image":
-        is_safe, confidence, reasons = await loop.run_in_executor(
-             None, analyze_image_content, request.content, age, request.context
-        )
-    else:
-        # Default fallback
-        is_safe, confidence, reasons = True, 0.0, []
-    
-    # Log the detection if harmful
-    if not is_safe:
-        log_dict = {
-            "profile_id": request.profile_id,
-            "content_type": request.content_type,
-            "detected_at": datetime.utcnow(),
-            "is_safe": is_safe,
-            "confidence": confidence,
-            "reasons": reasons,
-            "content_snippet": request.content[:200] if request.content_type == "text" else "[Content blocked]",
-            "url": request.context
-        }
-        await db.logs.insert_one(log_dict)
-    
-    return {
-        "is_safe": is_safe,
-        "confidence": confidence,
-        "reasons": reasons,
-        "blocked": not is_safe
-    }
+
+    except Exception as e:
+        print(f"Analysis Failed: {e}") 
+        # Fail SAFE (Allow) so browser doesn't break.
+        return ContentAnalysisResponse(is_safe=True, confidence=0.0, reasons=["Scanner Error"], blocked=False)
 
 # ==================== LOGS ROUTES ====================
 

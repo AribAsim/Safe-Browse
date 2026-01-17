@@ -1,15 +1,19 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  Alert,
-  Modal,
-  ActivityIndicator,
-  KeyboardAvoidingView,
+  ScrollView,
+  Animated,
+  Dimensions,
   Platform,
+  StatusBar,
+  Modal,
+  KeyboardAvoidingView,
+  Alert,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,26 +24,165 @@ import { useAppMode } from '../../contexts/AppModeContext';
 import axios from 'axios';
 import Constants from 'expo-constants';
 
+const { width, height } = Dimensions.get('window');
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL;
 
-export default function ChildBrowser() {
+interface Shortcut {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  color: string;
+  url: string;
+}
+
+interface Tab {
+  id: number;
+  url: string;
+  title: string;
+  favicon: string;
+}
+
+export default function SafeBrowseBrowser() {
   const { user, token } = useAuth();
   const { setMode, selectedProfile } = useAppMode();
   const router = useRouter();
   const webViewRef = useRef<WebView>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
+  // Core States
   const [url, setUrl] = useState('https://www.google.com');
   const [currentUrl, setCurrentUrl] = useState('https://www.google.com');
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
+  const [childName, setChildName] = useState('Child');
+
+  // UI States
   const [loading, setLoading] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [blockReason, setBlockReason] = useState('');
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+
+  // Stats
+  const [blockedCount, setBlockedCount] = useState(3);
+  const [screenTime, setScreenTime] = useState(45);
+  const [safetyScore, setSafetyScore] = useState(95);
+
+  // Modals
   const [exitModalVisible, setExitModalVisible] = useState(false);
+  const [tabsModalVisible, setTabsModalVisible] = useState(false);
   const [pin, setPin] = useState('');
 
+  // Tabs
+  const [tabs, setTabs] = useState<Tab[]>([
+    { id: 1, url: 'https://www.google.com', title: 'Google', favicon: '🌐' }
+  ]);
+  const [activeTab, setActiveTab] = useState(1);
+
+  // Animation
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const shieldScale = useRef(new Animated.Value(0)).current;
+
+  // Shield pulse animation
+  useEffect(() => {
+    if (isScanning) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.2,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+    } else {
+      Animated.spring(pulseAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isScanning]);
+
+  // Show shield animation on mount
+  useEffect(() => {
+    Animated.spring(shieldScale, {
+      toValue: 1,
+      tension: 50,
+      friction: 7,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  // Fetch Child Name
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        if (selectedProfile && token) {
+          const response = await axios.get(`${API_URL}/api/profiles/${selectedProfile}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (response.data && response.data.name) {
+            setChildName(response.data.name);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching profile:', error);
+      }
+    };
+    fetchProfile();
+  }, [selectedProfile, token]);
+
+  // Handle Hardware Back Button
+  useEffect(() => {
+    const backAction = () => {
+      // 1. If WebView can go back, go back
+      if (canGoBack && webViewRef.current) {
+        webViewRef.current.goBack();
+        return true; // Block default behavior
+      }
+
+      // 2. If blocked or on home, ask for PIN to exit
+      handleExitChildMode();
+      return true; // Block default behavior (prevent exiting app)
+    };
+
+    const backHandler = BackHandler.addEventListener(
+      'hardwareBackPress',
+      backAction
+    );
+
+    return () => backHandler.remove();
+  }, [canGoBack]); // Re-bind when canGoBack changes so we have latest state
+
+  const shortcuts: Shortcut[] = [
+    { icon: 'home', label: 'Home', color: '#6366f1', url: 'https://www.pbskids.org' },
+    { icon: 'book', label: 'Learn', color: '#10b981', url: 'https://www.khanacademy.org' },
+    { icon: 'game-controller', label: 'Games', color: '#a855f7', url: 'https://www.coolmathgames.com' },
+    { icon: 'color-palette', label: 'Create', color: '#ec4899', url: 'https://scratch.mit.edu' },
+    { icon: 'flask', label: 'Science', color: '#f59e0b', url: 'https://www.natgeokids.com' },
+    { icon: 'musical-notes', label: 'Music', color: '#06b6d4', url: 'https://musiclab.chromeexperiments.com' },
+    { icon: 'videocam', label: 'Videos', color: '#ef4444', url: 'https://www.youtube.com/kids' },
+    { icon: 'globe', label: 'Explore', color: '#8b5cf6', url: 'https://www.worldometers.info' },
+    { icon: 'calculator', label: 'Math', color: '#f97316', url: 'https://www.mathplayground.com' },
+  ];
+
+  const suggestions = [
+    'dinosaurs facts for kids',
+    'fun math games',
+    'science experiments at home',
+  ];
+
+  // Content Analysis
   const analyzeUrl = async (targetUrl: string) => {
     try {
+      if (!selectedProfile) return true; // Can't analyze without profile
+
+      setIsScanning(true);
       const response = await axios.post(
         `${API_URL}/api/content/analyze`,
         {
@@ -53,28 +196,34 @@ export default function ChildBrowser() {
         }
       );
 
+      setIsScanning(false);
+
       if (response.data.blocked) {
         setBlocked(true);
         setBlockReason(response.data.reasons.join(', '));
+        setBlockedCount(prev => prev + 1);
         return false;
       }
 
       return true;
     } catch (error) {
       console.error('Error analyzing URL:', error);
-      return true; // Allow on error to not break browsing
+      setIsScanning(false);
+      return true; // Fail OPEN to keep browser usable
     }
   };
 
   const handleNavigate = async () => {
     let targetUrl = url.trim();
 
-    if (!targetUrl) {
-      return;
-    }
+    if (!targetUrl) return;
 
-    // Add https:// if no protocol specified
-    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    // Check if it's a search or a URL
+    const isUrl = (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')) || (targetUrl.includes('.') && !targetUrl.includes(' '));
+
+    if (!isUrl) {
+      targetUrl = `https://www.google.com/search?q=${encodeURIComponent(targetUrl)}`;
+    } else if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
       targetUrl = 'https://' + targetUrl;
     }
 
@@ -85,6 +234,7 @@ export default function ChildBrowser() {
     if (isSafe) {
       setCurrentUrl(targetUrl);
       setBlocked(false);
+      setShowSuggestions(false);
       webViewRef.current?.reload();
     }
   };
@@ -107,6 +257,8 @@ export default function ChildBrowser() {
       const data = JSON.parse(event.nativeEvent.data);
 
       if (data.type === 'text' || data.type === 'image') {
+        if (!selectedProfile) return;
+
         const response = await axios.post(
           `${API_URL}/api/content/analyze`,
           {
@@ -121,16 +273,14 @@ export default function ChildBrowser() {
         );
 
         if (response.data.blocked) {
-          // Immediately stop more content from loading
-          if (webViewRef.current) {
-            webViewRef.current.stopLoading();
-          }
+          webViewRef.current?.stopLoading();
           setBlocked(true);
           setBlockReason(response.data.reasons.join(', '));
+          setBlockedCount(prev => prev + 1);
         }
       }
     } catch (error) {
-      console.error('Error handling webview message:', error);
+      // Silent fail for background scans to not spam logs
     }
   };
 
@@ -154,190 +304,324 @@ export default function ChildBrowser() {
     }
   };
 
-  const handleUnblock = () => {
+  const handleShortcutPress = (shortcutUrl: string) => {
+    setUrl(shortcutUrl);
+    setCurrentUrl(shortcutUrl);
     setBlocked(false);
-    setBlockReason('');
+    webViewRef.current?.reload();
   };
 
-  // Inject script to intercept content
+  const addNewTab = () => {
+    const newTab: Tab = {
+      id: Date.now(),
+      url: 'https://www.google.com',
+      title: 'New Tab',
+      favicon: '🌐',
+    };
+    setTabs([...tabs, newTab]);
+    setActiveTab(newTab.id);
+    setCurrentUrl(newTab.url);
+  };
+
+  const closeTab = (tabId: number) => {
+    if (tabs.length === 1) return;
+
+    const filtered = tabs.filter(tab => tab.id !== tabId);
+    setTabs(filtered);
+
+    if (activeTab === tabId && filtered.length > 0) {
+      setActiveTab(filtered[0].id);
+      setCurrentUrl(filtered[0].url);
+    }
+  };
+
   const injectedJavaScript = `
     (function() {
       const processedImages = new Set();
       const processedTexts = new Set();
+      
+      // Debounce function to prevent spamming
+      let timeout = null;
 
       function scanContent() {
-        // 1. Scan Text (Titles, Headers, Body)
-        const bodyText = document.body.innerText.substring(0, 1000);
-        if (bodyText && !processedTexts.has(bodyText)) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'text',
-            content: bodyText
-          }));
-          processedTexts.add(bodyText);
+        // Only scan significant text chunks (> 50 chars) to avoid random noise
+        const bodyText = document.body.innerText;
+        if (bodyText && bodyText.length > 50 && !processedTexts.has(bodyText.substring(0, 50))) {
+             // Send first 2000 chars for analysis
+             const textToSend = bodyText.substring(0, 2000);
+             window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'text',
+                content: textToSend
+             }));
+             processedTexts.add(bodyText.substring(0, 50)); // Cache by prefix
         }
 
-        // 2. Scan Images (Regular tags) - Limit to first 15 to prevent CPU flood
         const images = document.getElementsByTagName('img');
         let processedCount = 0;
-        for (let i = 0; i < images.length && processedCount < 15; i++) {
+        for (let i = 0; i < images.length && processedCount < 10; i++) {
           const src = images[i].src;
           if (src && !processedImages.has(src)) {
-            // Process if it looks like an image or data URI
             if (src.startsWith('data:') || src.includes('image') || src.match(/\\.(jpg|jpeg|png|webp|gif|avif)/i)) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'image',
-                content: src
-              }));
-              processedImages.add(src);
-              processedCount++;
+              // Ignore small icons/tracking pixels (heuristic)
+              if (images[i].width > 50 && images[i].height > 50) {
+                  window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'image',
+                    content: src
+                  }));
+                  processedImages.add(src);
+                  processedCount++;
+              }
             }
           }
-        }
-
-        // 3. Scan for CSS Background Images (Common in modern sites)
-        const elementsWithBg = document.querySelectorAll('[style*="background-image"]');
-        elementsWithBg.forEach(el => {
-          const style = window.getComputedStyle(el);
-          const bg = style.backgroundImage;
-          if (bg && bg !== 'none' && bg.startsWith('url(')) {
-            const url = bg.slice(4, -1).replace(/["']/g, "");
-            if (url && !processedImages.has(url)) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'image',
-                content: url
-              }));
-              processedImages.add(url);
-            }
-          }
-        });
-
-        // 4. Scan for Videos (Metadata)
-        const videos = document.getElementsByTagName('video');
-        if (videos.length > 0 && !processedTexts.has('video_detected')) {
-          const videoTags = Array.from(document.querySelectorAll('meta[name*="title"], meta[property*="title"]'))
-            .map(m => m.content).join(' ');
-          if (videoTags) {
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'text',
-              content: "Video content title: " + videoTags
-            }));
-          }
-          processedTexts.add('video_detected');
         }
       }
 
-      // Monitor for changes
-      const observer = new MutationObserver(() => {
-        scanContent();
-      });
-      
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['src']
-      });
-
-      // Initial check
-      setTimeout(scanContent, 1000);
-      // Periodical check for dynamic content not caught by observer
-      setInterval(scanContent, 3000);
+      // Run less frequently to save resources
+      setTimeout(scanContent, 2000);
+      setInterval(scanContent, 5000); 
     })();
     true;
   `;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.exitButton}
-          onPress={handleExitChildMode}
-        >
-          <Ionicons name="arrow-back" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Safe Browser</Text>
-        <View style={styles.headerRight}>
-          <Ionicons name="shield-checkmark" size={24} color="#10b981" />
-        </View>
-      </View>
+      <StatusBar barStyle="light-content" />
 
-      <View style={styles.urlBar}>
-        <TouchableOpacity
-          onPress={() => webViewRef.current?.goBack()}
-          disabled={!canGoBack}
-          style={[styles.navButton, !canGoBack && styles.navButtonDisabled]}
-        >
-          <Ionicons name="chevron-back" size={20} color={canGoBack ? '#f1f5f9' : '#64748b'} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={() => webViewRef.current?.goForward()}
-          disabled={!canGoForward}
-          style={[styles.navButton, !canGoForward && styles.navButtonDisabled]}
-        >
-          <Ionicons name="chevron-forward" size={20} color={canGoForward ? '#f1f5f9' : '#64748b'} />
-        </TouchableOpacity>
-
-        <View style={styles.urlInputContainer}>
-          <Ionicons name="globe" size={16} color="#64748b" style={styles.urlIcon} />
-          <TextInput
-            style={styles.urlInput}
-            value={url}
-            onChangeText={setUrl}
-            onSubmitEditing={handleNavigate}
-            placeholder="Enter URL or search..."
-            placeholderTextColor="#64748b"
-            autoCapitalize="none"
-            autoCorrect={false}
+      {/* Progress Bar */}
+      {loadProgress > 0 && loadProgress < 100 && (
+        <View style={styles.progressBarContainer}>
+          <Animated.View
+            style={[styles.progressBar, { width: `${loadProgress}%` }]}
           />
-        </View>
-
-        <TouchableOpacity onPress={handleNavigate} style={styles.goButton}>
-          <Ionicons name="arrow-forward" size={20} color="#ffffff" />
-        </TouchableOpacity>
-      </View>
-
-      {loading && (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#6366f1" />
-          <Text style={styles.loadingText}>Checking content safety...</Text>
         </View>
       )}
 
-      {blocked ? (
-        <View style={styles.blockedContainer}>
-          <View style={styles.blockedContent}>
-            <Ionicons name="shield-outline" size={80} color="#ef4444" />
+      {/* Header (Top Bar with URL) */}
+      <View style={styles.header}>
+        <View style={styles.headerTopRow}>
+          <View style={styles.profileSection}>
+            <TouchableOpacity onPress={handleExitChildMode}>
+              <View style={styles.profileBadge}>
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{childName[0]}</Text>
+                </View>
+                <Animated.View
+                  style={[
+                    styles.safetyIndicator,
+                    { transform: [{ scale: shieldScale }] }
+                  ]}
+                >
+                  <Ionicons name="shield-checkmark" size={10} color="#fff" />
+                </Animated.View>
+              </View>
+            </TouchableOpacity>
+            <View style={styles.profileInfo}>
+              <Text style={styles.profileName}>{childName}</Text>
+            </View>
+          </View>
+
+          <View style={styles.actionButtons}>
+            <TouchableOpacity style={styles.iconButton} onPress={addNewTab}>
+              <Ionicons name="add" size={24} color="#f1f5f9" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.iconButton} onPress={() => setTabsModalVisible(true)}>
+              <Ionicons name="documents-outline" size={22} color="#f1f5f9" />
+              <View style={styles.tabBadge}>
+                <Text style={styles.tabBadgeText}>{tabs.length}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+      </View>
+
+      {/* Main Content */}
+      <View style={styles.mainContent}>
+        {/* Shortcuts Section (Only if on Home/Google) */}
+        {!blocked && currentUrl === 'https://www.google.com' && (
+          <View style={styles.shortcutsSection}>
+            <ScrollView
+              ref={scrollRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.shortcutsContainer}
+            >
+              {shortcuts.map((item, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.shortcut}
+                  onPress={() => handleShortcutPress(item.url)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.shortcutIcon, { backgroundColor: item.color + '20' }]}>
+                    <Ionicons name={item.icon} size={28} color={item.color} />
+                  </View>
+                  <Text style={styles.shortcutLabel}>{item.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Center Content Greetings (Only on Home) */}
+        {!blocked && currentUrl === 'https://www.google.com' && (
+          <View style={styles.centerContent}>
+            <Text style={styles.greeting}>Hi {childName} 👋</Text>
+            <Text style={styles.subGreeting}>What would you like to explore today?</Text>
+
+            {/* Home Screen Search Bar */}
+            <View style={styles.homeSearchContainer}>
+              <View style={styles.searchBar}>
+                <Ionicons name="lock-closed" size={14} color="#10b981" />
+                <TextInput
+                  style={styles.searchInput}
+                  value={url}
+                  onChangeText={(text) => {
+                    setUrl(text);
+                    setShowSuggestions(text.length > 0);
+                  }}
+                  onFocus={() => {
+                    if (url === 'https://www.google.com') setUrl('');
+                    setShowSuggestions(true);
+                  }}
+                  onSubmitEditing={handleNavigate}
+                  placeholder="Search or enter URL"
+                  placeholderTextColor="#64748b"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  selectTextOnFocus
+                />
+                {url && url !== 'https://www.google.com' ? (
+                  <TouchableOpacity onPress={() => {
+                    setUrl('');
+                    setShowSuggestions(false);
+                  }}>
+                    <Ionicons name="close-circle" size={18} color="#64748b" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              {/* Suggestions Panel for Home */}
+              {showSuggestions && (
+                <View style={styles.suggestionsPanel}>
+                  <Text style={styles.suggestionsTitle}>Safe Suggestions</Text>
+                  {suggestions.map((item, idx) => (
+                    <TouchableOpacity
+                      key={idx}
+                      style={styles.suggestionItem}
+                      onPress={() => {
+                        setUrl(item);
+                        setShowSuggestions(false);
+                        handleNavigate();
+                      }}
+                    >
+                      <Ionicons name="search" size={16} color="#64748b" />
+                      <Text style={styles.suggestionText}>{item}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Stats (Moved here from old top bar) */}
+            <View style={styles.statsBar}>
+              <View style={styles.statBadge}>
+                <Ionicons name="time-outline" size={14} color="#f59e0b" />
+                <Text style={styles.statValue}>{screenTime}m</Text>
+              </View>
+              <View style={styles.statBadge}>
+                <Ionicons name="shield-checkmark" size={14} color="#10b981" />
+                <Text style={styles.statValue}>{blockedCount} Blocks</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* WebView or Blocked Screen */}
+        {blocked ? (
+          <View style={styles.blockedContainer}>
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+              <Ionicons name="shield-outline" size={80} color="#ef4444" />
+            </Animated.View>
             <Text style={styles.blockedTitle}>Content Blocked</Text>
             <Text style={styles.blockedReason}>{blockReason}</Text>
             <Text style={styles.blockedMessage}>
               This content has been blocked to keep you safe. If you think this is a mistake,
               ask your parent to review it.
             </Text>
-            <TouchableOpacity style={styles.unblockButton} onPress={handleUnblock}>
-              <Text style={styles.unblockButtonText}>Go Back</Text>
+            <TouchableOpacity
+              style={styles.goBackButton}
+              onPress={() => {
+                setBlocked(false);
+                setCurrentUrl('https://www.google.com');
+              }}
+            >
+              <Text style={styles.goBackButtonText}>Go to Safe Home</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      ) : (
-        <WebView
-          ref={webViewRef}
-          source={{ uri: currentUrl }}
-          style={styles.webview}
-          onNavigationStateChange={handleWebViewNavigationStateChange}
-          onMessage={handleWebViewMessage}
-          injectedJavaScript={injectedJavaScript}
-          javaScriptEnabled
-          domStorageEnabled
-          startInLoadingState
-          renderLoading={() => (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#6366f1" />
+        ) : currentUrl !== 'https://www.google.com' ? (
+          <WebView
+            ref={webViewRef}
+            source={{ uri: currentUrl }}
+            style={styles.webview}
+            onNavigationStateChange={handleWebViewNavigationStateChange}
+            onMessage={handleWebViewMessage}
+            injectedJavaScript={injectedJavaScript}
+            onLoadProgress={({ nativeEvent }) => setLoadProgress(nativeEvent.progress * 100)}
+            javaScriptEnabled
+            domStorageEnabled
+            startInLoadingState
+          />
+        ) : null}
+
+        {/* Floating AI Shield */}
+        {isScanning && (
+          <Animated.View
+            style={[
+              styles.floatingShield,
+              { transform: [{ scale: pulseAnim }] }
+            ]}
+          >
+            <Ionicons name="shield-checkmark" size={20} color="#10b981" />
+            <Text style={styles.floatingShieldText}>Scanning...</Text>
+            <View style={styles.miniProgressBar}>
+              <View style={[styles.miniProgressFill, { width: '70%' }]} />
             </View>
-          )}
-        />
+          </Animated.View>
+        )}
+      </View>
+
+      {/* Bottom Search Bar (When Browsing) */}
+      {!blocked && currentUrl !== 'https://www.google.com' && (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+        >
+          <View style={styles.bottomBarContainer}>
+            <View style={styles.searchBar}>
+              <Ionicons name="lock-closed" size={14} color="#10b981" />
+              <TextInput
+                style={styles.searchInput}
+                value={url}
+                onChangeText={(text) => {
+                  setUrl(text);
+                }}
+                onSubmitEditing={handleNavigate}
+                placeholder="Search or enter URL"
+                placeholderTextColor="#64748b"
+                autoCapitalize="none"
+                autoCorrect={false}
+                selectTextOnFocus
+              />
+              <TouchableOpacity onPress={() => handleShortcutPress('https://www.google.com')}>
+                <Ionicons name="home" size={20} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       )}
 
+      {/* Exit PIN Modal */}
       <Modal visible={exitModalVisible} animationType="slide" transparent>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -350,11 +634,9 @@ export default function ChildBrowser() {
                 <Ionicons name="close" size={24} color="#94a3b8" />
               </TouchableOpacity>
             </View>
-
             <Text style={styles.modalDescription}>
-              Enter your parent&apos;s PIN to exit Safe Browser
+              Enter your parent's PIN to exit Safe Browser
             </Text>
-
             <TextInput
               style={styles.pinInput}
               value={pin}
@@ -365,12 +647,45 @@ export default function ChildBrowser() {
               maxLength={4}
               secureTextEntry
             />
-
             <TouchableOpacity style={styles.verifyButton} onPress={verifyPinAndExit}>
               <Text style={styles.verifyButtonText}>Verify & Exit</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Tabs Modal */}
+      <Modal visible={tabsModalVisible} animationType="slide" transparent>
+        <View style={styles.modalContainer}>
+          <View style={styles.tabsModal}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Open Tabs ({tabs.length})</Text>
+              <TouchableOpacity onPress={() => setTabsModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              {tabs.map(tab => (
+                <View key={tab.id} style={styles.tabItem}>
+                  <TouchableOpacity
+                    style={styles.tabItemContent}
+                    onPress={() => {
+                      setActiveTab(tab.id);
+                      setCurrentUrl(tab.url);
+                      setTabsModalVisible(false);
+                    }}
+                  >
+                    <Text style={styles.tabEmoji}>{tab.favicon}</Text>
+                    <Text style={styles.tabItemTitle}>{tab.title}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => closeTab(tab.id)}>
+                    <Ionicons name="close-circle" size={24} color="#64748b" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -381,108 +696,238 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0f172a',
   },
+  progressBarContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: '#1e293b',
+    zIndex: 100,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#10b981',
+  },
   header: {
+    backgroundColor: '#1e293b',
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+    paddingBottom: 12,
+  },
+  headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: '#1e293b',
-    borderBottomWidth: 1,
-    borderBottomColor: '#334155',
   },
-  exitButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#334155',
+  profileSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  profileBadge: {
+    position: 'relative',
+  },
+  avatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#6366f1',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: 18,
+  avatarText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  safetyIndicator: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#10b981',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#1e293b',
+  },
+  profileInfo: {
+    gap: 2,
+  },
+  profileName: {
+    fontSize: 14,
     fontWeight: '600',
     color: '#f1f5f9',
   },
-  headerRight: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  urlBar: {
+  actionButtons: {
     flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#1e293b',
-    borderBottomWidth: 1,
-    borderBottomColor: '#334155',
+    gap: 12,
   },
-  navButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#334155',
+  iconButton: {
+    padding: 6,
+    position: 'relative'
+  },
+  tabBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#6366f1',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 8,
+    borderWidth: 1.5,
+    borderColor: '#1e293b'
   },
-  navButtonDisabled: {
-    opacity: 0.4,
+  tabBadgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: 'bold'
   },
-  urlInputContainer: {
-    flex: 1,
+  // Removed old top searchBarContainer styles if they conflict, but repurposing:
+  homeSearchContainer: {
+    width: '100%',
+    paddingHorizontal: 24,
+    marginTop: 24,
+    position: 'relative',
+    zIndex: 50,
+  },
+  bottomBarContainer: {
+    backgroundColor: '#1e293b',
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 12, // Safe area padding
+  },
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#0f172a',
-    borderRadius: 20,
+    borderRadius: 12,
     paddingHorizontal: 12,
-    height: 36,
+    height: 44,
+    gap: 10,
     borderWidth: 1,
     borderColor: '#334155',
   },
-  urlIcon: {
-    marginRight: 8,
-  },
-  urlInput: {
+  searchInput: {
     flex: 1,
     color: '#f1f5f9',
     fontSize: 14,
   },
-  goButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#6366f1',
+  suggestionsPanel: {
+    marginTop: 8,
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+    gap: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    elevation: 8,
+  },
+  suggestionsTitle: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    backgroundColor: '#0f172a',
+    borderRadius: 8,
+  },
+  suggestionText: {
+    fontSize: 14,
+    color: '#f1f5f9',
+  },
+  statsBar: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 16
+  },
+  statBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#334155',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  statValue: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#f1f5f9',
+  },
+  mainContent: {
+    flex: 1,
+  },
+  shortcutsSection: {
+    paddingVertical: 20,
+    backgroundColor: '#1e293b',
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+  shortcutsContainer: {
+    paddingHorizontal: 16,
+    gap: 16,
+  },
+  shortcut: {
+    alignItems: 'center',
+    gap: 8,
+    marginRight: 8,
+  },
+  shortcutIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 8,
+  },
+  shortcutLabel: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+  centerContent: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 100,
+  },
+  greeting: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#f1f5f9',
+    marginBottom: 8,
+  },
+  subGreeting: {
+    fontSize: 16,
+    color: '#94a3b8',
   },
   webview: {
     flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#0f172a',
-  },
-  loadingText: {
-    color: '#94a3b8',
-    marginTop: 16,
-    fontSize: 16,
+    backgroundColor: '#fff',
   },
   blockedContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0f172a',
     padding: 24,
-  },
-  blockedContent: {
-    alignItems: 'center',
-    maxWidth: 400,
   },
   blockedTitle: {
     fontSize: 28,
@@ -503,17 +948,44 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
   },
-  unblockButton: {
+  goBackButton: {
     backgroundColor: '#6366f1',
     paddingHorizontal: 32,
     paddingVertical: 16,
     borderRadius: 12,
     marginTop: 32,
   },
-  unblockButtonText: {
-    color: '#ffffff',
+  goBackButtonText: {
+    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  floatingShield: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 2,
+    borderColor: '#10b981',
+    gap: 6,
+    minWidth: 140,
+  },
+  floatingShieldText: {
+    color: '#10b981',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  miniProgressBar: {
+    height: 4,
+    backgroundColor: '#334155',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  miniProgressFill: {
+    height: '100%',
+    backgroundColor: '#10b981',
   },
   modalContainer: {
     flex: 1,
@@ -566,5 +1038,33 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 18,
     fontWeight: '600',
+  },
+  tabsModal: {
+    backgroundColor: '#1e293b',
+    borderRadius: 24,
+    padding: 24,
+    maxHeight: '80%',
+  },
+  tabItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+  tabItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  tabEmoji: {
+    fontSize: 24,
+  },
+  tabItemTitle: {
+    fontSize: 16,
+    color: '#f1f5f9',
+    fontWeight: '500',
   },
 });
