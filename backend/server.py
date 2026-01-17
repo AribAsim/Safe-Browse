@@ -257,6 +257,19 @@ class WellbeingResponse(BaseModel):
     top_blocked_categories: List[Dict[str, Any]]
     insights: List[InsightItem]
 
+class DailyStat(BaseModel):
+    date: str  # YYYY-MM-DD
+    screen_time_minutes: int
+    unsafe_count: int
+    
+class DigitalWellbeingResponse(BaseModel):
+    profile_id: str
+    period_days: int
+    total_screen_time_minutes: int
+    avg_daily_minutes: int
+    daily_stats: List[DailyStat]
+    unsafe_detections_total: int
+
 # ==================== SECURITY HELPERS ====================
 
 def hash_password(password: str) -> str:
@@ -1158,6 +1171,94 @@ async def get_wellbeing_insights(
         "blocked_count": unsafe_count,
         "top_blocked_categories": sorted_cats[:3],
         "insights": insights
+    }
+
+@api_router.get("/parent/digital-wellbeing/{profile_id}", response_model=DigitalWellbeingResponse)
+async def get_digital_wellbeing(
+    profile_id: str,
+    days: int = 7,
+    current_user = Depends(get_current_user)
+):
+    # Verify profile ownership
+    profile = await db.profiles.find_one({
+        "_id": ObjectId(profile_id),
+        "parent_id": str(current_user["_id"])
+    })
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # Fetch logs sorted chronologically (ascending) for time calculation
+    logs = await db.logs.find({
+        "profile_id": profile_id,
+        "detected_at": {"$gte": start_date}
+    }).sort("detected_at", 1).to_list(2000)
+    
+    # Initialize daily stats structure
+    daily_map = {}
+    for i in range(days):
+        d = (start_date + timedelta(days=i)).strftime('%Y-%m-%d')
+        daily_map[d] = {"screen_time": 0, "unsafe": 0}
+        
+    last_time = None
+    
+    # Process logs
+    for log in logs:
+        # Normalize date
+        log_date = log["detected_at"].strftime('%Y-%m-%d')
+        
+        # If logs are slightly outside range (due to utc/local drift), skip or clamp
+        # basic clamping to avoid key errors
+        if log_date not in daily_map:
+            # Try to map to nearest or skip
+             continue
+
+        # Count Unsafe
+        if not log["is_safe"]:
+            daily_map[log_date]["unsafe"] += 1
+            
+        # Screen Time Algorithm
+        # Only time gaps < 5 minutes are considered continuous browsing session
+        # If gap > 5 mins, we assume it's a new interaction and credit just 1 minute
+        if last_time:
+            gap = (log["detected_at"] - last_time).total_seconds()
+            if gap < 300: # 5 minutes
+                 daily_map[log_date]["screen_time"] += gap
+            else:
+                 daily_map[log_date]["screen_time"] += 60 # credit 1 minute for new activity
+        else:
+            daily_map[log_date]["screen_time"] += 60 # First action
+            
+        last_time = log["detected_at"]
+        
+    # Format Response
+    daily_stats = []
+    total_time = 0
+    total_unsafe = 0
+    
+    # Ensure sorted order for graph
+    sorted_dates = sorted(daily_map.keys())
+    
+    for d in sorted_dates:
+        minutes = int(daily_map[d]["screen_time"] / 60)
+        daily_stats.append({
+            "date": d,
+            "screen_time_minutes": minutes,
+            "unsafe_count": daily_map[d]["unsafe"]
+        })
+        total_time += minutes
+        total_unsafe += daily_map[d]["unsafe"]
+        
+    return {
+        "profile_id": profile_id,
+        "period_days": days,
+        "total_screen_time_minutes": total_time,
+        "avg_daily_minutes": int(total_time / days) if days > 0 else 0,
+        "daily_stats": daily_stats,
+        "unsafe_detections_total": total_unsafe
     }
 
 # ==================== MAIN APP SETUP ====================

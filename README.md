@@ -22,6 +22,7 @@ SafeBrowse is a next-generation parental control application designed to provide
   - 🚫 Age-Restricted Social Media (Users < 16 blocked from FB, Insta, TikTok, etc.)
 
 ### 👨‍👩‍👧‍👦 Parent Dashboard
+- **Digital Wellbeing**: Estimate daily screen time and track safety trends with visual charts.
 - **Profile Management**: Create custom profiles for each child with age-appropriate sensitivity levels (Strict, Moderate, Lenient).
 - **Activity Monitoring**: View detailed logs of blocked content, complete with reasoning (e.g., "AI detected violence with 95% confidence").
 - **Secure Access**: PIN-protected parent mode ensures children cannot tamper with settings.
@@ -175,6 +176,7 @@ Safe-Browse/
 - `POST /api/content/analyze`: Submit text/image/url for safety check.
 - `GET /api/logs`: Retrieve activity history for profiles.
 - `GET /api/insights/{profile_id}`: Retrieve aggregated wellbeing stats and insights.
+- `GET /api/parent/digital-wellbeing/{profile_id}`: Retrieve daily screen time and detection charts.
 
 ---
 

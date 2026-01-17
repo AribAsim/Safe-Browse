@@ -15,6 +15,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useAppMode } from '../../contexts/AppModeContext';
 import axios from 'axios';
 import Constants from 'expo-constants';
+import WellbeingSection from '../../components/WellbeingSection';
 
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -172,6 +173,13 @@ export default function Dashboard() {
           )}
         </View>
 
+
+        {profiles.length > 0 && (
+          <View style={styles.section}>
+            <WellbeingSection profileId={profiles[0].id} />
+          </View>
+        )}
+
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Recent Activity</Text>
@@ -222,7 +230,7 @@ export default function Dashboard() {
           </View>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeAreaView >
   );
 }
 
