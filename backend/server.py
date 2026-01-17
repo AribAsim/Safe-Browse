@@ -26,6 +26,7 @@ from transformers import pipeline
 from PIL import Image
 import numpy as np
 import asyncio
+from urllib.parse import urlparse
 try:
     import torch
     HAS_CUDA = torch.cuda.is_available()
@@ -293,27 +294,49 @@ VIOLENCE_KEYWORDS = [
     r'\btorture\b', r'\bgore\b', r'\bmutilat',
     r'\bterroris', r'\bbomb\b', r'\bexplosive',
     r'\bshoot(?!ing star)\b', r'\bstab\b', r'\bstrangle\b',
+    r'\bbehead\b', r'\bdecapitat', r'\bdismember',
+    r'\bblood\b', r'\bbleed\b', r'\bcorpse\b', r'\bcadavre\b',
+    r'\bmassacre\b', r'\bslaughter\b', r'\bassault\b', r'\bbeating\b',
+    r'\bfight\b', r'\battack\b', r'\bweapon\b', r'\bgun\b', r'\bknife\b',
+    r'\bfirearm\b', r'\bpistol\b', r'\brifle\b', r'\bammo\b',
+    r'\bwar\b', r'\bbattle\b', r'\bcombat\b'
 ]
 
 DRUG_KEYWORDS = [
     r'\bcocaine\b', r'\bheroin\b', r'\bmeth\b', r'\bfentanyl\b',
-    r'\bdrug deal', r'\bget high\b', r'\bsnort\b',
+    r'\bdrug deal', r'\bget high\b', r'\bsnort\b', r'\bweed\b',
+    r'\bcannabis\b', r'\bmarijuana\b', r'\blsd\b', r'\bacid\b',
+    r'\becstasy\b', r'\bmolly\b', r'\bpill\b', r'\boverdose\b',
+    r'\baddict\b', r'\bneedle\b', r'\bsyringe\b'
 ]
 
 GAMBLING_KEYWORDS = [
     r'\bcasino\b', r'\bslot machine\b', r'\bpoker\b', r'\broulette\b',
     r'\bbetting\b', r'\bjackpot\b', r'\bblackjack\b', r'\bonline bet',
-    r'\bgamble', r'\bgambling\b'
+    r'\bgamble', r'\bgambling\b', r'\blottery\b', r'\braffle\b',
+    r'\bwager\b', r'\bbookie\b', r'\bcard game\b', r'\bno limit\b',
+    r'\btexas holdem\b', r'\bbet365\b', r'\bdraftkings\b'
 ]
 
 SELF_HARM_KEYWORDS = [
     r'\bcut myself\b', r'\bcutting myself\b', r'\bkill myself\b',
     r'\bwant to die\b', r'\banorexia\b', r'\bbulimia\b', r'\bpro-ana\b',
-    r'\bself-harm\b', r'\bhow to commit suicide\b'
+    r'\bself-harm\b', r'\bhow to commit suicide\b',
+    r'\bhang myself\b', r'\bend it all\b', r'\bsolitary\b',
+    r'\bdepression\b', r'\bhopeless\b', r'\bworthless\b'
+]
+
+CRIME_KEYWORDS = [
+    r'\bcrime\b', r'\bcriminal\b', r'\brobbery\b', r'\btheft\b',
+    r'\bsteal\b', r'\bfraud\b', r'\bscam\b', r'\bhack\b',
+    r'\billegal\b', r'\bfelony\b', r'\bjail\b', r'\bprison\b',
+    r'\barrest\b', r'\bgang\b', r'\bmafia\b', r'\bcartel\b',
+    r'\btrafficking\b', r'\bkidnap\b', r'\babduct\b',
+    r'\bshoplift\b', r'\bvandalism\b', r'\barson\b'
 ]
 
 # Meta keywords that are often safe in search suggestions but unsafe on regular sites
-META_KEYWORDS = ['adult content', 'adult site', 'adult movie', 'adult video', 'explicit content']
+META_KEYWORDS = []
 
 # Compile patterns for efficiency
 EXPLICIT_RE = re.compile('|'.join(EXPLICIT_KEYWORDS), re.IGNORECASE)
@@ -321,14 +344,18 @@ VIOLENCE_RE = re.compile('|'.join(VIOLENCE_KEYWORDS), re.IGNORECASE)
 DRUG_RE = re.compile('|'.join(DRUG_KEYWORDS), re.IGNORECASE)
 GAMBLING_RE = re.compile('|'.join(GAMBLING_KEYWORDS), re.IGNORECASE)
 SELF_HARM_RE = re.compile('|'.join(SELF_HARM_KEYWORDS), re.IGNORECASE)
+CRIME_RE = re.compile('|'.join(CRIME_KEYWORDS), re.IGNORECASE)
 
 # Trusted domains that manage their own content or are common utilities
 # We are more lenient with images/text from these domains
-TRUSTED_DOMAINS = [
-    'google.com', 'youtube.com', 'wikipedia.org', 'bing.com',
-    'khanacademy.org', 'coursera.org', 'edx.org', 'openai.com',
-    'microsoft.com', 'apple.com', 'github.com', 'stackoverflow.com',
-    'gmail.com', 'outlook.com', 'zoom.us', 'duolingo.com'
+TRUSTED_DOMAINS = []
+
+# Age-Based Social Media Restrictions
+SOCIAL_MEDIA_AGE_LIMIT = 16
+SOCIAL_MEDIA_DOMAINS = [
+    'facebook.com', 'instagram.com', 'tiktok.com', 'twitter.com', 'x.com',
+    'snapchat.com', 'reddit.com', 'discord.com', 'pinterest.com', 
+    'tumblr.com', 'twitch.tv'
 ]
 
 # Age-based thresholds (Adjusted to be less aggressive)
@@ -378,6 +405,7 @@ def analyze_text_content(text: str, age: int, url_context: Optional[str] = None)
     drug_matches = DRUG_RE.findall(text)
     gambling_matches = GAMBLING_RE.findall(text)
     self_harm_matches = SELF_HARM_RE.findall(text)
+    crime_matches = CRIME_RE.findall(text)
     
     # Context-aware filtering decision:
     on_search_engine = is_search_engine(url_context)
@@ -396,11 +424,13 @@ def analyze_text_content(text: str, age: int, url_context: Optional[str] = None)
     if filtered_explicit:
         reasons.append(f"Explicit terms detected: {set(filtered_explicit)}")
     if violence_matches and not on_trusted_site:
-        reasons.append(f"Violence-related terms: {set(violence_matches)}")
+        reasons.append(f"Violence/Gore detected: {set(violence_matches)}")
     if drug_matches and not on_trusted_site:
         reasons.append(f"Drug-related terms: {set(drug_matches)}")
     if gambling_matches and not on_trusted_site:
         reasons.append(f"Gambling-related terms: {set(gambling_matches)}")
+    if crime_matches and not on_trusted_site:
+        reasons.append(f"Crime-related terms: {set(crime_matches)}")
     if self_harm_matches:
         reasons.append(f"Self-harm terms: {set(self_harm_matches)}")
 
@@ -458,14 +488,18 @@ def analyze_text_content(text: str, age: int, url_context: Optional[str] = None)
         is_safe = False
         
     # Block on violence/drugs/gambling for younger kids (unless on trusted site)
+    # Block on violence/drugs/gambling for younger kids (unless on trusted site)
     if not on_trusted_site:
         if age <= 12:
             # Zero tolerance for younger kids
-            if any([violence_matches, drug_matches, gambling_matches, self_harm_matches]):
+            if any([violence_matches, drug_matches, gambling_matches, self_harm_matches, crime_matches]):
                 is_safe = False
         else:
             # Older kids: Block explicit gambling/self-harm/drugs, allow mild violence context
-            if any([drug_matches, gambling_matches, self_harm_matches]):
+            if any([drug_matches, gambling_matches, self_harm_matches, crime_matches]):
+                is_safe = False
+            # Still block severe violence for older kids
+            if len(violence_matches) > 2:
                 is_safe = False
 
     return is_safe, avg_ai_confidence, reasons
@@ -597,15 +631,35 @@ def analyze_url(url: str, age: int) -> Tuple[bool, float, List[str]]:
     reasons = []
     score = 0
     
+    # 1. Age-Based Social Media Restriction (Policy Check)
+    # We check this FIRST to short-circuit and avoid unnecessary processing
+    if age is not None and age < SOCIAL_MEDIA_AGE_LIMIT and SOCIAL_MEDIA_DOMAINS:
+        try:
+            parsed_url = urlparse(url_lower)
+            hostname = parsed_url.hostname
+            
+            if hostname:
+                for domain in SOCIAL_MEDIA_DOMAINS:
+                    # Strict matching: matches "facebook.com" or "m.facebook.com"
+                    # Does NOT match "fakebook.com" or "facebook.com.scam.site" (unless logic is flawed, but endswith is decent for minimal setup)
+                    # Better: check if it IS the domain or ENDS WITH .domain
+                    if hostname == domain or hostname.endswith('.' + domain):
+                        return False, 1.0, [f"Age-restricted Social Media: {domain}"]
+        except Exception:
+            # If URL parsing fails, fail open (allow) for this specific check to avoid overblocking
+            pass
+    
     # Known adult domains (Expanded)
     adult_domains = [
         'pornhub', 'xvideos', 'xnxx', 'redtube', 'youporn', 
-        'xhamster', 'hentai', 'onlyfans', 'chaturbate', 'beeg', 'tnaflix'
+        'xhamster', 'hentai', 'onlyfans', 'chaturbate', 'beeg', 'tnaflix',
+        'liveleak', 'goregrish', 'kaotic', 'theync' # Gore sites
     ]
     # Known gambling domains
     gambling_domains = [
         'bet365', 'pokerstars', '888casino', 'draftkings', 'fanduel',
-        'roobet', 'stake.com', 'bovada'
+        'roobet', 'stake.com', 'bovada', 'betway', 'williamhill',
+        'slots', 'casino', 'poker', 'betting', 'sportsbook'
     ]
     
     for domain in adult_domains:
@@ -637,11 +691,16 @@ def analyze_url(url: str, age: int) -> Tuple[bool, float, List[str]]:
              reasons.append(f"Explicit keywords in URL: {set(filtered_keywords)}")
              score += 50
     
-    # Violence detection in URL
+    # Violence/Crime detection in URL
     val_keywords = VIOLENCE_RE.findall(url_lower)
-    if val_keywords and age <= 12 and not is_trusted_domain(url_lower):
-        reasons.append(f"Restricted content in URL: {set(val_keywords)}")
-        score += 40
+    crime_keywords = CRIME_RE.findall(url_lower)
+    
+    if (val_keywords or crime_keywords) and not is_trusted_domain(url_lower):
+        if val_keywords:
+            reasons.append(f"Violence/Gore in URL: {set(val_keywords)}")
+        if crime_keywords:
+            reasons.append(f"Crime in URL: {set(crime_keywords)}")
+        score += 80
 
     # Gambling & Self-Harm in URL
     if GAMBLING_RE.search(url_lower) and not is_trusted_domain(url_lower):
