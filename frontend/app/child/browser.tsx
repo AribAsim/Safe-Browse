@@ -62,6 +62,7 @@ export default function SafeBrowseBrowser() {
   const [loadProgress, setLoadProgress] = useState(0);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [maturityLevel, setMaturityLevel] = useState('strict');
 
   // Stats
   const [blockedCount, setBlockedCount] = useState(3);
@@ -128,6 +129,7 @@ export default function SafeBrowseBrowser() {
           });
           if (response.data && response.data.name) {
             setChildName(response.data.name);
+            setMaturityLevel(response.data.maturity_level || 'strict');
           }
         }
       } catch (error) {
@@ -273,10 +275,22 @@ export default function SafeBrowseBrowser() {
         );
 
         if (response.data.blocked) {
-          webViewRef.current?.stopLoading();
-          setBlocked(true);
-          setBlockReason(response.data.reasons.join(', '));
-          setBlockedCount(prev => prev + 1);
+          // If image blocked:
+          // - Strict Mode: Block ONLY if it's an image violation (Full Page Block)
+          // - Moderate/Lenient Mode: Block ONLY the image (Blur)
+
+          if (data.type === 'image' && (maturityLevel === 'moderate' || maturityLevel === 'lenient')) {
+            // Specific Image Blocking for older kids
+            const script = `if(window.safeBrowseBlockImage) window.safeBrowseBlockImage('${data.id}'); true;`;
+            webViewRef.current?.injectJavaScript(script);
+            setBlockedCount(prev => prev + 1);
+          } else {
+            // Strict mode OR Text violation = Block Whole Page
+            webViewRef.current?.stopLoading();
+            setBlocked(true);
+            setBlockReason(response.data.reasons.join(', '));
+            setBlockedCount(prev => prev + 1);
+          }
         }
       }
     } catch (error) {
@@ -340,6 +354,19 @@ export default function SafeBrowseBrowser() {
       const processedImages = new Set();
       const processedTexts = new Set();
       
+      // Image blocking receiver
+      if (!window.safeBrowseBlockImage) {
+        window.safeBrowseBlockImage = function(id) {
+          const img = document.querySelector('img[data-safebrowse-id="' + id + '"]');
+          if (img) {
+             img.style.filter = 'blur(60px) grayscale(100%)'; // Increased blur
+             img.style.opacity = '0.3';
+             img.style.border = '4px solid #ef4444'; // Red border
+             img.style.pointerEvents = 'none';
+          }
+        };
+      }
+      
       // Debounce function to prevent spamming
       let timeout = null;
 
@@ -359,14 +386,23 @@ export default function SafeBrowseBrowser() {
         const images = document.getElementsByTagName('img');
         let processedCount = 0;
         for (let i = 0; i < images.length && processedCount < 10; i++) {
-          const src = images[i].src;
+          const img = images[i];
+          const src = img.src;
+          
           if (src && !processedImages.has(src)) {
             if (src.startsWith('data:') || src.includes('image') || src.match(/\\.(jpg|jpeg|png|webp|gif|avif)/i)) {
               // Ignore small icons/tracking pixels (heuristic)
-              if (images[i].width > 50 && images[i].height > 50) {
+              if (img.width > 50 && img.height > 50) {
+                  // Assign Unique ID for targetted blocking
+                  if (!img.getAttribute('data-safebrowse-id')) {
+                     img.setAttribute('data-safebrowse-id', 'sb-' + Math.random().toString(36).substr(2, 9));
+                  }
+                  const id = img.getAttribute('data-safebrowse-id');
+                  
                   window.ReactNativeWebView.postMessage(JSON.stringify({
                     type: 'image',
-                    content: src
+                    content: src,
+                    id: id
                   }));
                   processedImages.add(src);
                   processedCount++;
